@@ -2,8 +2,6 @@
 # Simon Bowler 22/01/2017
 # simon@bowler.id.au
 # 
-# Version: 1.5 - Bug fix for debugging log and also adding connection resilliance. Will now reset
-#                bluetooth connection if dropped for any reason.
 # Version: 1.4 - Added additional resiliance and debugging when parsing configuration files. 
 #                Also added debug parameter to settings.ini to provide additional logging.
 # Version: 1.3 - Upgraded for firmware 0.4.4
@@ -19,7 +17,7 @@ import os
 
 import bluetooth._bluetooth as bluez
 import threading
-import thread
+import _thread
 
 import numpy
 
@@ -27,7 +25,7 @@ from scipy.interpolate import interp1d
 from scipy import arange, array, exp
 import csv
 import functools
-import ConfigParser
+import configparser
 
 TILTHYDROMETER_COLOURS = [ 'Red', 'Green', 'Black', 'Purple', 'Orange', 'Blue', 'Yellow', 'Pink' ]
 
@@ -108,7 +106,6 @@ class TiltHydrometer:
         self.medianWindow = medianWindow
         self.debug = debug
         self.values = []
-        self.calibrationDataTime = {}
         self.calibrate()
     
     def calibrate(self):
@@ -134,13 +131,13 @@ class TiltHydrometer:
             
             try:
                 calibratedTemperature = self.tempCalibrationFunction(temperature)
-            except Exception, e:
-                print "ERROR: TiltHydrometer (" + self.colour + "): Unable to calibrate temperature: " + str(temperature) + " - " + e.message
+            except Exception as e:
+                print("ERROR: TiltHydrometer ({color}): Unable to calibrate temperature: {temperature} - {message}".format(colour=self.colour,temperature=str(temperature),message=e.message))
                 
             try:
                 calibratedGravity = self.gravityCalibrationFunction(gravity)
-            except Exception, e:
-                print "ERROR: TiltHydrometer (" + self.colour + "): Unable to calibrate gravity: " + str(gravity) + " - " + e.message
+            except Exception as e:
+                print("ERROR: TiltHydrometer ({colour}): Unable to calibrate gravity: {gravity} - {message}".format(colour=self.colour,gravity=str(gravity),message=e.message))
             
             self.values.append(TiltHydrometerValue(calibratedTemperature, calibratedGravity))
             
@@ -237,19 +234,18 @@ class TiltHydrometer:
         actualValues = []
         csvFile = None
         filename = "tiltHydrometer/" + type.upper() + "." + colour.lower()
-        
-        #Find out last time we attempted to load.
+
         lastChecked = self.calibrationDataTime.get(type + "_checked", 0)
         if ((int(time.time()) - lastChecked) < DATA_REFRESH_WINDOW):
             #Only check every x seconds
             return None
         
         
-        #Retrieve at the last load time.
         lastLoaded = self.calibrationDataTime.get(type, 0)
         self.calibrationDataTime[type + "_checked"] = int(time.time())
         
         try:
+            #print "opening file"
             if (os.path.isfile(filename)):
                 fileModificationTime = os.path.getmtime(filename)
                 if (lastLoaded >= fileModificationTime):
@@ -262,13 +258,13 @@ class TiltHydrometer:
                 lineNumber = 1
                 for row in csvFileReader:
                     if (self.debug):
-                            print "TiltHydrometer (" + colour + "): File - " + filename  + ", Line " + str(lineNumber) + " processing [" + str(row) + "]"
+                            print("TiltHydrometer ({colour}): File - {filename}, Line {lineNumber} processing [{row}]".format(colour=colour, filename=filename, lineNumber=str(lineNumber), row=str(row) ))
                     #Skip any comment rows and rows with no configuration data
                     if ((len(row) != 2) or (row[0][:1] == "#")):
-                        print "WARNING: TiltHydrometer (" + colour + "): File - " + filename  + ", Line " + str(lineNumber) + " was ignored as does not contain valid configuration data [" + str(row) + "]"
+                        print("WARNING: TiltHydrometer ({colour}): File - {filename}, Line {lineNumber} was ignored as does not contain valid configuration data [{row}]".format(colour=colour, filename=filename, lineNumber=str(lineNumber), row=str(row) ))
                     else: 
                         if (self.debug):
-                            print "TiltHydrometer (" + colour + "): File - " + filename  + ", Line " + str(lineNumber) + " processed successfully"
+                            print("TiltHydrometer ({colour}): File - {filename}, Line {lineNumber} processed successfully".format(colour=colour, filename=filename, lineNumber=str(lineNumber)))
                         originalValues.append(float(row[0]))
                         actualValues.append(float(row[1]))
                     
@@ -276,9 +272,9 @@ class TiltHydrometer:
                 #Close file
                 csvFile.close()
         except IOError:
-            print "TiltHydrometer (" + colour + "):  " + type.capitalize() + ": No calibration data (" + filename  + ")"
-        except Exception, e:
-            print "ERROR: TiltHydrometer (" + colour + "): Unable to initialise " + type.capitalize() + " Calibration data (" + filename  + ") - " + e.message
+            print("TiltHydrometer ({colour}):  {type_cap}: No calibration data ({filename})".format(colour=colour,type_cap=type.capitalize(),filename=filename))
+        except Exception as e:
+            print("ERROR: TiltHydrometer ({colour}): Unable to initialise {type_cap} Calibration data ({filename}) - {message}".format(colour=colour, type_cap=type.capitalize(), filename=filename, message=e.message))
             #Attempt to close the file
             if (csvFile is not None):
                 #Close file
@@ -288,14 +284,13 @@ class TiltHydrometer:
         if (len(actualValues) >= 2):
             interpolationFunction = interp1d(originalValues, actualValues, bounds_error=False, fill_value=1)
             returnFunction = functools.partial(extrapolationCalibration,extrap1d(interpolationFunction))
-            print "TiltHydrometer (" + colour + "): Initialised " + type.capitalize() + " Calibration: Interpolation"
+            print("TiltHydrometer ({colour}): Initialised {type_cap} Calibration: Interpolation".format(colour=colour,type_cap=type.capitalize()))
         #Not enough values. Likely just an offset calculation
         elif (len(actualValues) == 1):
             offset = actualValues[0] - originalValues[0]
             returnFunction = functools.partial(offsetCalibration, offset)
-            print "TiltHydrometer (" + colour + "): Initialised " + type.capitalize() + " Calibration: Offset (" + str(offset) + ")"
+            print("TiltHydrometer ({colour}): Initialised {type_cap} Calibration: Offset ({offset})".format(colour=colour,type_cap=type.capitalize(), offset=str(offset)))
         return returnFunction
-        
 #Class to manage the monitoring of all TiltHydrometers and storing the read values.                
 class TiltHydrometerManager:
     inFahrenheit = True
@@ -309,18 +304,14 @@ class TiltHydrometerManager:
     tiltHydrometers = {}
     
     brewthread = None
-    lastLoadTime = 0
-    lastCheckedTime = 0
     
     def __init__(self, inFahrenheit = True, averagingPeriod = 0, medianWindow = 0, device_id = 0):
         self.inFahrenheit = inFahrenheit
         self.dev_id = device_id
         self.averagingPeriod = averagingPeriod
         self.medianWindow = medianWindow
-        
-        self.reloadSettings()
 
-    #Convert Tilt UUID back to colour
+
     def tiltHydrometerName(self, uuid):
         return {
                 'a495bb10c5b14b44b5121370f02d74de' : 'Red',
@@ -332,12 +323,10 @@ class TiltHydrometerManager:
                 'a495bb70c5b14b44b5121370f02d74de' : 'Yellow',
                 'a495bb80c5b14b44b5121370f02d74de' : 'Pink'
         }.get(uuid)
-    
-    #Convert Temp in F to C
+
     def convertFtoC(self, temperatureF):
         return (temperatureF - 32) * 5.0 / 9
     
-    #Convert Tilt SG to float
     def convertSG(self, gravity):
         return float(gravity)/ 1000
     
@@ -361,60 +350,46 @@ class TiltHydrometerManager:
         
     #Scanner function
     def scan(self):
+        try:
+            sock = bluez.hci_open_dev(self.dev_id)
+
+        except Exception as e:
+            print("ERROR: Accessing bluetooth device: {message}".format(message=e.message))
+            sys.exit(1)
+
+        blescan.hci_le_set_scan_parameters(sock)
+        blescan.hci_enable_le_scan(sock)
+        
         #Keep scanning until the manager is told to stop.
         while self.scanning:
-            try:
-                sock = bluez.hci_open_dev(self.dev_id)
-
-            except Exception, e:
-                print "ERROR: Accessing bluetooth device: " + e.message
-                sys.exit(1)
-
-            blescan.hci_le_set_scan_parameters(sock)
-            blescan.hci_enable_le_scan(sock)
             
-            try:
-                #Keep scanning until the manager is told to stop.
-                while self.scanning:
-                    self.processSocket(sock)
-                    
-                    reloaded = self.reloadSettings();
-                    if (reloaded):
-                        break
-            except Exception, e:
-                print "ERROR: Accessing bluetooth device whilst scanning: " + e.message
-                print "Resetting Bluetooth device"
-    
-    #Processes Tilt BLE data from open socket.
-    def processSocket(self, sock):
-        returnedList = blescan.parse_events(sock, 10)
-                    
-        for beacon in returnedList:
-            beaconParts = beacon.split(",")
+            returnedList = blescan.parse_events(sock, 10)
             
-            #Resolve whether the received BLE event is for a Tilt Hydrometer by looking at the UUID.
-            name = self.tiltHydrometerName(beaconParts[1])
-            
-            #If the event is for a Tilt Hydrometer , process the data
-            if name is not None:
-                if (self.debug):
-                    print name + " Tilt Device Found (UUID " + str(beaconParts[1]) + "): " + str(beaconParts)
-            
-                #Get the temperature and convert to C if needed.
-                temperature = int(beaconParts[2])
-                if not self.inFahrenheit:
-                    temperature = self.convertFtoC(temperature)
+            for beacon in returnedList:
+                beaconParts = beacon.split(",")
                 
-                #Get the gravity.
-                gravity = self.convertSG(beaconParts[3])
+                #Resolve whether the received BLE event is for a Tilt Hydrometer by looking at the UUID.
+                name = self.tiltHydrometerName(beaconParts[1])
                 
-                #Store the retrieved values in the relevant Tilt Hydrometer object.
-                self.storeValue(name, temperature, gravity)
-            else:
-                #Output what has been found.
                 if (self.debug):
-                    print "UNKNOWN BLE Device Found: " + str(beaconParts)
-    
+                        print("{name} Tilt Device Found (UUID {uuid}): {beaconParts}".format(name, beaconParts[1],str(beaconParts)))
+                
+                #If the event is for a Tilt Hydrometer , process the data
+                if name is not None:
+                    #Get the temperature and convert to C if needed.
+                    temperature = int(beaconParts[2])
+                    if not self.inFahrenheit:
+                        temperature = self.convertFtoC(temperature)
+                    
+                    #Get the gravity.
+                    gravity = self.convertSG(beaconParts[3])
+                    
+                    #Store the retrieved values in the relevant Tilt Hydrometer object.
+                    self.storeValue(name, temperature, gravity)
+                else:
+                    #Output what has been found.
+                    if (self.debug):
+                        print("UNKNOWN BLE Device Found: {beaconParts}".format(str(beaconParts)))
     #Stop Scanning function
     def stop(self):
         self.scanning = False
@@ -422,35 +397,13 @@ class TiltHydrometerManager:
     #Start the scanning thread
     def start(self):
         self.scanning = True
-        self.brewthread = thread.start_new_thread(self.scan, ())
+        self.brewthread = _thread.start_new_thread(self.scan, ())
     
-    #Checks to see if the settings file has changed, then reloads the settings if it has. Returns True if the settings were reloaded.
-    def reloadSettings(self):
-        filename = "tiltHydrometer/settings.ini"
-        reloadSettings = False
-        
-        #Only check every x seconds
-        if ((int(time.time()) - self.lastCheckedTime) >= DATA_REFRESH_WINDOW):
-            self.lastCheckedTime = int(time.time())
-            
-            #Check that file exists
-            if (os.path.isfile(filename)):
-                    fileModificationTime = os.path.getmtime(filename)
-                    
-                    #Check file modification time against last loaded time.
-                    if (self.lastLoadTime < fileModificationTime):
-                        #File has been modified since last load (or first load)
-                        self.loadSettings(filename)
-                        self.lastLoadTime = int(time.time())
-                        reloadSettings = True
-
-        return reloadSettings
     #Load Settings from config file, overriding values given at creation. This needs to be called before the start function is called.
-    def loadSettings(self, filename):
+    def loadSettings(self):
+        filename = "tiltHydrometer/settings.ini"
         try:
-            print "Loading settings from file: " + filename
-            
-            config = ConfigParser.ConfigParser()
+            config = configparser.ConfigParser()
             config.read(filename)
             
             #Load config values
@@ -460,10 +413,7 @@ class TiltHydrometerManager:
             self.medianWindow = config.getint("Manager","MedianWindowVals")
             self.debug = config.getboolean("Manager","Debug")
             
-            #Reset store
-            self.tiltHydrometers = {}
-            
 
-        except Exception, e:
-            print "ERROR: Loading default settings file (tiltHydrometer/settings.ini): " + e.message
+        except Exception as e:
+            print("ERROR: Loading default settings file (tiltHydrometer/settings.ini): {message}".format(e.message))
 
